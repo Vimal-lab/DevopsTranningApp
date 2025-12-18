@@ -1,0 +1,6 @@
+vpc_cidr         = "10.168.0.0/23"
+public_subnet_1  = "10.168.0.0/25"
+public_subnet_2  = "10.168.0.128/25"
+private_subnet_1 = "10.168.1.0/25"
+private_subnet_2 = "10.168.1.128/25"
+common_tag       = "devops_project"
