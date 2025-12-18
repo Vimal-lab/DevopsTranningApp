@@ -1,0 +1,210 @@
+---
+- name: DevOps Training - Infra + Build + Deploy (EKS)
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    aws_region: "{{ lookup('env', 'AWS_REGION') | default('ap-south-1', true) }}"
+    cluster_name: "{{ lookup('env', 'CLUSTER_NAME') | default('capstone_project', true) }}"
+    admin_cidr: "{{ lookup('env', 'ADMIN_CIDR') | default('0.0.0.0/0', true) }}"
+    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default((lookup('env','PWD') ~ '/.kubeconfig'), true) }}"
+    workspace: "{{ lookup('env', 'WORKSPACE') | default(lookup('env','PWD'), true) }}"
+    image_tag: "{{ lookup('env', 'GIT_COMMIT') | default('manual', true) }}"
+
+  tasks:
+    - name: Show effective settings
+      ansible.builtin.debug:
+        msg:
+          - "aws_region={{ aws_region }}"
+          - "cluster_name={{ cluster_name }}"
+          - "admin_cidr={{ admin_cidr }}"
+          - "workspace={{ workspace }}"
+          - "kubeconfig_path={{ kubeconfig_path }}"
+          - "image_tag={{ image_tag }}"
+
+    - name: Run SAST scanners (IaC + code) via Docker
+      ansible.builtin.shell: |
+        set -eux
+        docker run --rm -v "{{ workspace }}:/src" bridgecrew/checkov:latest -d /src/VimalDemoWebApp/Terraform || true
+        docker run --rm -v "{{ workspace }}:/src" aquasec/tfsec:latest /src/VimalDemoWebApp/Terraform || true
+        docker run --rm -v "{{ workspace }}:/src" returntocorp/semgrep:latest semgrep --config=auto /src || true
+      args:
+        executable: /bin/bash
+
+    - name: Terraform apply - Bootstrap (create state bucket + lock table)
+      ansible.builtin.shell: |
+        set -eux
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/bootstrap"
+        terraform init
+        terraform apply -auto-approve
+      args:
+        executable: /bin/bash
+
+    - name: Read bootstrap outputs (state bucket + lock table)
+      ansible.builtin.shell: |
+        set -eu
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/bootstrap"
+        echo "bucket=$(terraform output -raw tf_state_bucket)"
+        echo "table=$(terraform output -raw tf_lock_table)"
+      args:
+        executable: /bin/bash
+      register: bootstrap_out
+
+    - name: Set facts from bootstrap outputs
+      ansible.builtin.set_fact:
+        tf_state_bucket: "{{ (bootstrap_out.stdout_lines | select('match','^bucket=') | list | first).split('=')[1] }}"
+        tf_lock_table: "{{ (bootstrap_out.stdout_lines | select('match','^table=') | list | first).split('=')[1] }}"
+
+    - name: Terraform apply - VPC
+      ansible.builtin.shell: |
+        set -eux
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/vpc"
+        terraform init \
+          -backend-config="bucket={{ tf_state_bucket }}" \
+          -backend-config="key=backend/vpc/terraform.tfstate" \
+          -backend-config="region={{ aws_region }}" \
+          -backend-config="dynamodb_table={{ tf_lock_table }}" \
+          -backend-config="encrypt=true"
+        terraform apply -auto-approve
+      args:
+        executable: /bin/bash
+
+    - name: Terraform apply - EKS
+      ansible.builtin.shell: |
+        set -eux
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/eks"
+        terraform init \
+          -backend-config="bucket={{ tf_state_bucket }}" \
+          -backend-config="key=backend/eks/terraform.tfstate" \
+          -backend-config="region={{ aws_region }}" \
+          -backend-config="dynamodb_table={{ tf_lock_table }}" \
+          -backend-config="encrypt=true"
+        terraform apply -auto-approve \
+          -var "tf_state_bucket={{ tf_state_bucket }}" \
+          -var "tf_state_region={{ aws_region }}" \
+          -var "vpc_state_key=backend/vpc/terraform.tfstate" \
+          -var "admin_cidr={{ admin_cidr }}"
+      args:
+        executable: /bin/bash
+
+    - name: Terraform apply - ECR
+      ansible.builtin.shell: |
+        set -eux
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/ecr"
+        terraform init \
+          -backend-config="bucket={{ tf_state_bucket }}" \
+          -backend-config="key=backend/ecr/terraform.tfstate" \
+          -backend-config="region={{ aws_region }}" \
+          -backend-config="dynamodb_table={{ tf_lock_table }}" \
+          -backend-config="encrypt=true"
+        terraform apply -auto-approve
+      args:
+        executable: /bin/bash
+
+    - name: Resolve ECR repository URL
+      ansible.builtin.shell: |
+        set -eu
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/ecr"
+        terraform output -raw repository_url
+      args:
+        executable: /bin/bash
+      register: ecr_repo_url
+
+    - name: Login to ECR
+      ansible.builtin.shell: |
+        set -eux
+        REPO_URL="{{ ecr_repo_url.stdout }}"
+        aws ecr get-login-password --region "{{ aws_region }}" | docker login --username AWS --password-stdin "$(echo "$REPO_URL" | cut -d/ -f1)"
+      args:
+        executable: /bin/bash
+
+    - name: Build image
+      ansible.builtin.shell: |
+        set -eux
+        REPO_URL="{{ ecr_repo_url.stdout }}"
+        IMAGE="{{ ecr_repo_url.stdout }}:{{ image_tag }}"
+        docker build -f "{{ workspace }}/VimalDemoWebApp/Dockerfile" -t "$IMAGE" "{{ workspace }}"
+        echo "$IMAGE" > "{{ workspace }}/image.txt"
+      args:
+        executable: /bin/bash
+
+    - name: Trivy scan image (HIGH/CRITICAL) via Docker
+      ansible.builtin.shell: |
+        set -eux
+        IMAGE="$(cat "{{ workspace }}/image.txt")"
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL "$IMAGE" || true
+      args:
+        executable: /bin/bash
+
+    - name: Push image
+      ansible.builtin.shell: |
+        set -eux
+        IMAGE="$(cat "{{ workspace }}/image.txt")"
+        docker push "$IMAGE"
+      args:
+        executable: /bin/bash
+
+    - name: Update kubeconfig for EKS
+      ansible.builtin.shell: |
+        set -eux
+        aws eks update-kubeconfig --name "{{ cluster_name }}" --region "{{ aws_region }}" --kubeconfig "{{ kubeconfig_path }}"
+      args:
+        executable: /bin/bash
+
+    - name: Resolve Classic ELB security group id from Terraform (eks stack)
+      ansible.builtin.shell: |
+        set -eu
+        cd "{{ workspace }}/VimalDemoWebApp/Terraform/eks"
+        terraform output -raw app_elb_security_group_id
+      args:
+        executable: /bin/bash
+      register: elb_sg_id
+
+    - name: Render Kubernetes manifests (replace __IMAGE__ and __ELB_SG_ID__)
+      ansible.builtin.shell: |
+        set -eux
+        IMAGE="$(cat "{{ workspace }}/image.txt")"
+        ELB_SG_ID="{{ elb_sg_id.stdout }}"
+        mkdir -p "{{ workspace }}/.rendered"
+        for f in "{{ workspace }}/VimalDemoWebApp/k8s/app/"*.yaml; do
+          sed -e "s|__IMAGE__|$IMAGE|g" -e "s|__ELB_SG_ID__|$ELB_SG_ID|g" "$f" > "{{ workspace }}/.rendered/$(basename "$f")"
+        done
+      args:
+        executable: /bin/bash
+
+    - name: Apply manifests
+      ansible.builtin.shell: |
+        set -eux
+        kubectl --kubeconfig "{{ kubeconfig_path }}" apply -f "{{ workspace }}/.rendered/namespace.yaml"
+        kubectl --kubeconfig "{{ kubeconfig_path }}" apply -f "{{ workspace }}/.rendered/deployment.yaml"
+        kubectl --kubeconfig "{{ kubeconfig_path }}" apply -f "{{ workspace }}/.rendered/service.yaml"
+        kubectl --kubeconfig "{{ kubeconfig_path }}" -n vimal-demo rollout status deploy/vimal-demo-webapp --timeout=5m
+      args:
+        executable: /bin/bash
+
+    - name: Install Vault (dev mode) with Helm (assessment/demo)
+      ansible.builtin.shell: |
+        set -eux
+        kubectl --kubeconfig "{{ kubeconfig_path }}" create namespace vault || true
+        helm repo add hashicorp https://helm.releases.hashicorp.com
+        helm repo update
+        helm upgrade --install vault hashicorp/vault -n vault \
+          --set "server.dev.enabled=true" \
+          --set "injector.enabled=true"
+      args:
+        executable: /bin/bash
+
+    - name: DAST - OWASP ZAP baseline against the Classic ELB
+      ansible.builtin.shell: |
+        set -eux
+        ENDPOINT="$(kubectl --kubeconfig "{{ kubeconfig_path }}" -n vimal-demo get svc vimal-demo-webapp -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+        if [ -z "$ENDPOINT" ]; then
+          echo "No ELB hostname yet; skipping DAST."
+          exit 0
+        fi
+        TARGET="http://$ENDPOINT/"
+        docker run --rm owasp/zap2docker-stable zap-baseline.py -t "$TARGET" -r "{{ workspace }}/zap-report.html" || true
+      args:
+        executable: /bin/bash
+
+

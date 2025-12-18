@@ -1,0 +1,31 @@
+services:
+  dind:
+    image: docker:27-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--host=tcp://0.0.0.0:2375"]
+    ports:
+      - "2375:2375"
+
+  runner:
+    build:
+      context: .
+      dockerfile: ci/runner/Dockerfile
+    depends_on:
+      - dind
+    environment:
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      CLUSTER_NAME: ${CLUSTER_NAME:-capstone_project}
+      ADMIN_CIDR: ${ADMIN_CIDR:-0.0.0.0/0}
+      KUBECONFIG: /workspace/.kubeconfig
+      DOCKER_HOST: tcp://dind:2375
+      DOCKER_BUILDKIT: "1"
+      # AWS creds are injected via env when you run (do NOT commit them)
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    volumes:
+      - ./:/workspace
+    entrypoint: ["bash","-lc"]
+

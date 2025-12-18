@@ -13,3 +13,8 @@ output "app_elb_security_group_id" {
   value       = aws_security_group.app_elb_sg.id
   description = "Security group ID to attach to the Classic ELB Service"
 }
+
+output "cluster_security_group_id" {
+  value       = aws_eks_cluster.ekscluster.vpc_config[0].cluster_security_group_id
+  description = "EKS-managed cluster security group id (useful for debugging LB/node traffic)"
+}

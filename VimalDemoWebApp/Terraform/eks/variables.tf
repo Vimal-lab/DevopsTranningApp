@@ -3,11 +3,31 @@ variable cluster_name {
   default     = "capstone_project"
   description = "eks cluster name"
 }
-variable region {
+
+variable "region" {
   type        = string
   default     = "ap-south-1"
-  description = "default eks region"
+  description = "AWS region"
 }
+
+variable "tf_state_bucket" {
+  type        = string
+  default     = ""
+  description = "S3 bucket used for terraform_remote_state lookups (set by pipeline)"
+}
+
+variable "tf_state_region" {
+  type        = string
+  default     = "ap-south-1"
+  description = "Region of the Terraform state bucket"
+}
+
+variable "vpc_state_key" {
+  type        = string
+  default     = "backend/vpc/terraform.tfstate"
+  description = "Key/path of the VPC stack state file in the state bucket"
+}
+
 
 
 variable admin_cidr {

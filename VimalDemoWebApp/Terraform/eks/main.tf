@@ -1,6 +1,11 @@
-module "vpc" {
-  source       = "../vpc"
-  cluster_name = var.cluster_name
+data "terraform_remote_state" "vpc" {
+  backend = "s3"
+
+  config = {
+    bucket = var.tf_state_bucket
+    key    = var.vpc_state_key
+    region = var.tf_state_region
+  }
 }
 
 
@@ -60,7 +65,7 @@ resource "aws_iam_role_policy_attachment" "ecr_read_only" {
 resource "aws_security_group" "ssh_access_sg" {
   name        = "${var.cluster_name}-ssh-access-sg"
   description = "Allow SSH to EKS worker nodes (restrict admin_cidr for real use)"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = data.terraform_remote_state.vpc.outputs.vpc_id
 
   ingress {
     from_port   = 22
@@ -81,7 +86,7 @@ resource "aws_security_group" "ssh_access_sg" {
 resource "aws_security_group" "app_elb_sg" {
   name        = "${var.cluster_name}-app-elb-sg"
   description = "Allow inbound HTTP to the Classic ELB"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = data.terraform_remote_state.vpc.outputs.vpc_id
 
   ingress {
     from_port   = 80
@@ -107,7 +112,12 @@ resource "aws_eks_cluster" "ekscluster" {
   version  = var.eks_version
 
   vpc_config {
-    subnet_ids              = [module.vpc.public_subnet_1_id, module.vpc.public_subnet_2_id, module.vpc.private_subnet_1_id, module.vpc.private_subnet_2_id]
+    subnet_ids              = [
+      data.terraform_remote_state.vpc.outputs.public_subnet_1_id,
+      data.terraform_remote_state.vpc.outputs.public_subnet_2_id,
+      data.terraform_remote_state.vpc.outputs.private_subnet_1_id,
+      data.terraform_remote_state.vpc.outputs.private_subnet_2_id
+    ]
     endpoint_public_access  = true
     endpoint_private_access = true
   }
@@ -122,7 +132,10 @@ resource "aws_eks_node_group" "private-nodes" {
   node_role_arn   = aws_iam_role.eks_node_role.arn
   
 
-  subnet_ids = [module.vpc.private_subnet_1_id, module.vpc.private_subnet_2_id]
+  subnet_ids = [
+    data.terraform_remote_state.vpc.outputs.private_subnet_1_id,
+    data.terraform_remote_state.vpc.outputs.private_subnet_2_id
+  ]
 
   capacity_type  = "ON_DEMAND"
   instance_types = [var.workernode_instance_type]

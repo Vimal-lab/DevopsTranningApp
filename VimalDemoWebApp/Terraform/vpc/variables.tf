@@ -3,6 +3,12 @@ variable vpc_cidr {
   default     = "10.168.0.0/23"
   description = "vpc cidr"
 }
+
+variable "region" {
+  type        = string
+  default     = "ap-south-1"
+  description = "AWS region"
+}
 variable public_subnet_1 {
   type        = string
   default     = "10.168.0.0/25"

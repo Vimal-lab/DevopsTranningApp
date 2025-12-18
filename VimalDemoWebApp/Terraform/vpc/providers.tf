@@ -9,13 +9,9 @@ terraform {
 
 # Configure the AWS Provider
 provider "aws" {
-  region = "ap-south-1"
+  region = var.region
 }
 
 terraform {
-  backend "s3" {
-    bucket = "global-logic-devops-training"
-    key    = "backend/vpc/terraform.tfstate"
-    region = "ap-south-1"
-  }
+  backend "s3" {}
 }

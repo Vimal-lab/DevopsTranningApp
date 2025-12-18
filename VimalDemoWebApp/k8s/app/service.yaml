@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vimal-demo-webapp
+  namespace: vimal-demo
+  annotations:
+    # Force Classic ELB (requirement)
+    service.beta.kubernetes.io/aws-load-balancer-type: "classic"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    # Jenkins will replace __ELB_SG_ID__ with the SG created by Terraform (eks/app_elb_security_group_id)
+    service.beta.kubernetes.io/aws-load-balancer-security-groups: "__ELB_SG_ID__"
+spec:
+  type: LoadBalancer
+  selector:
+    app: vimal-demo-webapp
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+
