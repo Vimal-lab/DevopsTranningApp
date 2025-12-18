@@ -1,92 +1,99 @@
 module "vpc" {
-  source  = "../vpc"
+  source       = "../vpc"
+  cluster_name = var.cluster_name
 }
 
 
-resource "aws_security_group" "controle_plane_security_group"{
-  name = "controle_plane_security_group"
-  description = "Security group for the elastic network interfaces between the control plane and the worker nodes"
-  vpc_id = module.vpc.vpc-id
+# --- IAM roles (created by Terraform, not hardcoded) ---
+data "aws_iam_policy_document" "eks_cluster_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["eks.amazonaws.com"]
+    }
+  }
 }
 
-resource "aws_security_group_rule" "ControlPlaneIngressFromWorkerNodesHttps" {
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  source_security_group_id = aws_security_group.controle_plane_security_group.id
-  security_group_id = aws_security_group.controle_plane_security_group.id
+resource "aws_iam_role" "eks_cluster_role" {
+  name               = "${var.cluster_name}-eks-cluster-role"
+  assume_role_policy = data.aws_iam_policy_document.eks_cluster_assume_role.json
 }
 
-
-resource "aws_security_group_rule" "ControlPlaneEgressToWorkerNodesKubelet" {
-  type              = "egress"
-  from_port         = 10250
-  to_port           = 10250
-  protocol          = "tcp"
-  source_security_group_id = aws_security_group.controle_plane_security_group.id
-  security_group_id = aws_security_group.controle_plane_security_group.id
-}
-resource "aws_security_group_rule" "ControlPlaneEgressToWorkerNodesHttps" {
-  type              = "egress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  source_security_group_id = aws_security_group.controle_plane_security_group.id
-  security_group_id = aws_security_group.controle_plane_security_group.id
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  role       = aws_iam_role.eks_cluster_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-# =============================================================================
-resource "aws_security_group" "worker_node_security_group"{
-  name = "worker_node_security_group"
-  description = "Security group for all the worker nodes"
-  vpc_id = module.vpc.vpc-id
+data "aws_iam_policy_document" "eks_node_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
 }
 
-resource "aws_security_group_rule" "WorkerNodesIngressFromWorkerNodes" {
-  type              = "ingress"
-  protocol          = "all"
-  from_port         = 0
-  to_port           = 0
-  source_security_group_id = aws_security_group.worker_node_security_group.id
-  security_group_id = aws_security_group.worker_node_security_group.id
+resource "aws_iam_role" "eks_node_role" {
+  name               = "${var.cluster_name}-eks-node-role"
+  assume_role_policy = data.aws_iam_policy_document.eks_node_assume_role.json
 }
 
-resource "aws_security_group_rule" "WorkerNodesIngressFromControlPlaneKubelet" {
-  type              = "ingress"
-  protocol          = "tcp"
-  from_port         = 10250
-  to_port           = 10250
-  source_security_group_id = aws_security_group.worker_node_security_group.id
-  security_group_id = aws_security_group.worker_node_security_group.id
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_read_only" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
 
-resource "aws_security_group_rule" "WorkerNodesIngressFromControlPlaneHttps" {
-  type              = "ingress"
-  protocol          = "tcp"
-  from_port         = 443
-  to_port           = 443
-  source_security_group_id = aws_security_group.worker_node_security_group.id
-  security_group_id = aws_security_group.worker_node_security_group.id
-  
-}
-# ==========================================================================
-resource "aws_security_group" "ssh_login_security_group"{
-  name = "worker_node_security_group for ssh login"
-  description = "Security group for all the worker nodes"
-  vpc_id = module.vpc.vpc-id
+# SSH access SG for managed node group remote access
+resource "aws_security_group" "ssh_access_sg" {
+  name        = "${var.cluster_name}-ssh-access-sg"
+  description = "Allow SSH to EKS worker nodes (restrict admin_cidr for real use)"
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
-    from_port = 22
-    protocol  =  "tcp"
-    to_port   = 22
-    cidr_blocks = ["10.168.0.0/16"]
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_cidr]
   }
-  egress{
-    from_port = 0
-    to_port   = 0
-    protocol  = -1
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ELB SG (Classic ELB created by Service can attach this via annotation)
+resource "aws_security_group" "app_elb_sg" {
+  name        = "${var.cluster_name}-app-elb-sg"
+  description = "Allow inbound HTTP to the Classic ELB"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
@@ -96,12 +103,13 @@ resource "aws_security_group" "ssh_login_security_group"{
 
 resource "aws_eks_cluster" "ekscluster" {
   name     = var.cluster_name
-  role_arn = var.controle_plane_iam_role
+  role_arn = aws_iam_role.eks_cluster_role.arn
   version  = var.eks_version
 
   vpc_config {
-    subnet_ids = [module.vpc.public-subnet-1-id,module.vpc.public-subnet-2-id]
-    security_group_ids = [aws_security_group.controle_plane_security_group.id]
+    subnet_ids              = [module.vpc.public_subnet_1_id, module.vpc.public_subnet_2_id, module.vpc.private_subnet_1_id, module.vpc.private_subnet_2_id]
+    endpoint_public_access  = true
+    endpoint_private_access = true
   }
 
 }
@@ -111,15 +119,19 @@ resource "aws_eks_cluster" "ekscluster" {
 resource "aws_eks_node_group" "private-nodes" {
   cluster_name    = aws_eks_cluster.ekscluster.name
   node_group_name = join("-",[var.cluster_name,"workernodes"])
-  node_role_arn   = var.workernode_iam_role
+  node_role_arn   = aws_iam_role.eks_node_role.arn
   
 
-  subnet_ids = [module.vpc.public-subnet-1-id,module.vpc.public-subnet-2-id]
+  subnet_ids = [module.vpc.private_subnet_1_id, module.vpc.private_subnet_2_id]
 
   capacity_type  = "ON_DEMAND"
   instance_types = [var.workernode_instance_type]
   disk_size      =  var.workernode_storage
 
+  remote_access {
+    ec2_ssh_key               = var.ssh_key_name
+    source_security_group_ids = [aws_security_group.ssh_access_sg.id]
+  }
 
   scaling_config {
     desired_size = var.desired_size

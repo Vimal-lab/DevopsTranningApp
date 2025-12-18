@@ -32,3 +32,9 @@ variable common_tag {
   default     = "devops_project"
   description = "tag for vpc resources"
 }
+
+variable cluster_name {
+  type        = string
+  default     = "capstone_project"
+  description = "EKS cluster name used for subnet tagging"
+}

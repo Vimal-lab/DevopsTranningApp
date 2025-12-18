@@ -1,5 +1,7 @@
 resource "aws_vpc" "devops_project" {
   cidr_block       = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
   tags = {
     Name = var.common_tag
@@ -14,6 +16,8 @@ resource "aws_subnet" "public_subnet_1" {
 
   tags = {
     Name = var.common_tag
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = "1"
   }
 }
 
@@ -26,6 +30,8 @@ resource "aws_subnet" "public_subnet_2" {
 
   tags = {
     Name = var.common_tag
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = "1"
   }
 }
 
@@ -33,9 +39,12 @@ resource "aws_subnet" "public_subnet_2" {
 resource "aws_subnet" "private_subnet_1" {
   vpc_id     = aws_vpc.devops_project.id
   cidr_block = var.private_subnet_1
+  availability_zone = "ap-south-1a"
 
   tags = {
     Name = var.common_tag
+    "kubernetes.io/cluster/${var.cluster_name}"      = "shared"
+    "kubernetes.io/role/internal-elb"                = "1"
   }
 }
 
@@ -43,9 +52,12 @@ resource "aws_subnet" "private_subnet_1" {
 resource "aws_subnet" "private_subnet_2" {
   vpc_id     = aws_vpc.devops_project.id
   cidr_block = var.private_subnet_2
+  availability_zone = "ap-south-1b"
 
   tags = {
     Name = var.common_tag
+    "kubernetes.io/cluster/${var.cluster_name}"      = "shared"
+    "kubernetes.io/role/internal-elb"                = "1"
   }
 }
 
@@ -81,7 +93,7 @@ resource "aws_route_table_association" "public_subnet_2_route_table_association"
 }
 
 resource "aws_eip" "nat_eip" {
-    # vpc = true 
+    domain = "vpc"
     tags = {
         Name = "devops_project"
     }
@@ -101,7 +113,7 @@ resource "aws_route_table" "private_subnet_routetable" {
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_nat_gateway.nat.id
+    nat_gateway_id = aws_nat_gateway.nat.id
   }
 
   tags = {

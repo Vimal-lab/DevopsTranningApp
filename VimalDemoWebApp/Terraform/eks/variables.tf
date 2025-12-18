@@ -10,28 +10,16 @@ variable region {
 }
 
 
-variable bucket_name {
+variable admin_cidr {
   type        = string
-  default     = "eiminenace-capstone-project"
-  description = "s3 backend configurations for eks"
-}
-
-variable controle_plane_iam_role {
-  type        = string
-  default     = "arn:aws:iam::117930648227:role/eks-master-role"
-  description = "IAM role for control plane"
+  default     = "0.0.0.0/0"
+  description = "CIDR allowed for SSH to worker nodes (restrict to your public IP/32 for real use)"
 }
 
 variable eks_version {
   type        = string
   default     = "1.30"
   description = "eks version to be deployed"
-}
-
-variable workernode_iam_role {
-  type        = string
-  default     = "arn:aws:iam::117930648227:role/eks-worker-nodes"
-  description = "IAM role for worker nodes"
 }
 
 variable ssh_key_name {
@@ -53,35 +41,23 @@ variable workernode_storage {
 }
 
 variable desired_size {
-  type        = string
-  default     = "3"
+  type        = number
+  default     = 2
   description = "desired number of worker nodes"
 }
 variable maximum_worker_nodes {
-  type        = string
-  default     = "5"
+  type        = number
+  default     = 3
   description = "maximum number of worker nodes"
 }
 
 variable min_worker_nodes {
-  type        = string
-  default     = "1"
+  type        = number
+  default     = 1
   description = "min number of worker nodes"
 }
 variable profile {
   type        = string
   default     = "dev"
   description = "aws resource creation profile"
-}
-
-variable vpc_id {
-  type        = string
-  default     = "vpc-0601551ed90c6d9f6"
-  description = "description"
-}
-
-variable subnet_ids {
-  type        = list
-  default     = ["subnet-058f52152d620e822","subnet-0e66b368e185b3742"]
-  description = "description"
 }
